@@ -1,189 +1,125 @@
-import folium
-import requests
 import streamlit as st
+import folium
 from streamlit_folium import st_folium
+import requests
 
-PREDICT_URL = "http://127.0.0.1:8000/predict"
-
+# Page Configuration
 st.set_page_config(
-    page_title="Wildfire Risk Dashboard",
+    page_title="Wildfire Risk Dashboard", 
+    page_icon="🔥", 
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="expanded"
 )
 
-DARK_CSS = """
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap');
+# Initialize Session State
+if 'prediction' not in st.session_state:
+    st.session_state.prediction = None
+if 'current_loc' not in st.session_state:
+    st.session_state.current_loc = (34.0522, -118.2437)
 
-    html, body, [class*="css"]  {
-        font-family: 'DM Sans', system-ui, sans-serif;
-    }
+# Default Model Features
+default_features = {
+    "temperature": 38.4,
+    "NDVI": 0.24,
+    "humidity": 14.0,
+    "wind_speed": 28.0,
+    "slope": 23.0
+}
 
-    .stApp {
-        background: linear-gradient(165deg, #0c0f14 0%, #12161f 45%, #0e1118 100%);
-        color: #e8eaed;
-    }
-
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #141821 0%, #0f1319 100%);
-        border-right: 1px solid rgba(148, 163, 184, 0.12);
-    }
-
-    [data-testid="stSidebar"] .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-    }
-
-    .dashboard-header {
-        margin-bottom: 0.35rem;
-        letter-spacing: -0.02em;
-        font-weight: 700;
-        font-size: clamp(1.75rem, 3vw, 2.35rem);
-        background: linear-gradient(120deg, #f8fafc 0%, #94a3b8 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-    }
-
-    .dashboard-subtitle {
-        color: #8b9cb0;
-        font-size: 1.05rem;
-        font-weight: 500;
-        margin-bottom: 2rem;
-        letter-spacing: 0.01em;
-    }
-
-    .panel-title {
-        color: #cbd5e1;
-        font-size: 0.78rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        margin-bottom: 0.75rem;
-    }
-
-    div[data-testid="column"] > div {
-        padding-top: 0.25rem;
-    }
-
-    .stSlider label, [data-testid="stWidgetLabel"] {
-        color: #cbd5e1 !important;
-    }
-
-    hr {
-        border-color: rgba(148, 163, 184, 0.15) !important;
-        margin: 1.25rem 0;
-    }
-</style>
-"""
-
-st.markdown(DARK_CSS, unsafe_allow_html=True)
-
-if "risk_score" not in st.session_state:
-    st.session_state.risk_score = None
-if "risk_category" not in st.session_state:
-    st.session_state.risk_category = None
-if "predict_error" not in st.session_state:
-    st.session_state.predict_error = None
-
-DEFAULT_MAP_CENTER = [20.0, 78.0]
-DEFAULT_ZOOM = 5
-
+# 1. Sidebar Layout
 with st.sidebar:
-    st.markdown('<p class="panel-title" style="margin-bottom:0.5rem;">Inputs</p>', unsafe_allow_html=True)
-    st.caption("Environmental features for risk estimation")
-    st.divider()
+    st.title("🔥 Wildfire Prediction")
+    st.markdown("---")
+    
+    aoi = st.selectbox("Area of Interest", ["Custom Location", "California", "Australia", "Mediterranean"])
+    mode = st.radio("Selection Mode", ["Point", "Bounding Box"])
+    
+    lat = st.number_input("Latitude", value=34.0522, format="%.4f")
+    lon = st.number_input("Longitude", value=-118.2437, format="%.4f")
+    
+    forecast = st.selectbox("Forecast Window", ["Next 24 Hours", "Next 48 Hours", "Next 7 Days"])
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    generate_btn = st.button("Generate Risk Map", type="primary", use_container_width=True)
 
-    temperature = st.slider("Temperature (°C)", -10.0, 55.0, 28.0, 0.5)
-    ndvi = st.slider("NDVI", -1.0, 1.0, 0.35, 0.01)
-    humidity = st.slider("Humidity (%)", 0.0, 100.0, 45.0, 1.0)
-    wind_speed = st.slider("Wind speed (km/h)", 0.0, 120.0, 15.0, 1.0)
-    slope = st.slider("Slope (°)", 0.0, 60.0, 8.0, 0.5)
+# 2. Backend Integration & Error Handling
+if generate_btn:
+    with st.spinner("Analyzing satellite data & computing risk..."):
+        try:
+            response = requests.post(
+                "http://127.0.0.1:8000/predict", 
+                json=default_features, 
+                timeout=10
+            )
+            if response.status_code == 200:
+                st.session_state.prediction = response.json()
+                st.session_state.current_loc = (lat, lon)
+            else:
+                st.sidebar.error(f"Backend Error: Received status code {response.status_code}")
+        except requests.exceptions.RequestException:
+            st.sidebar.error("Failed to connect to the backend. Please ensure the FastAPI server is running.")
 
-    st.divider()
-    generate_risk_map = st.button(
-        "Generate Risk Map", type="primary", use_container_width=True
+# Layout: Main Center & Right Panel
+col_map, col_panel = st.columns([2.5, 1], gap="large")
+
+# 3. Main Center: Map View
+with col_map:
+    st.subheader("Geospatial Risk View")
+    current_lat, current_lon = st.session_state.current_loc
+    
+    # Base Map
+    m = folium.Map(
+        location=[current_lat, current_lon], 
+        zoom_start=10, 
+        tiles="CartoDB dark_matter"
     )
 
-if generate_risk_map:
-    st.session_state.predict_error = None
-    payload = {
-        "temperature": temperature,
-        "NDVI": ndvi,
-        "humidity": humidity,
-        "wind_speed": wind_speed,
-        "slope": slope,
-    }
-    try:
-        response = requests.post(PREDICT_URL, json=payload, timeout=60)
-        response.raise_for_status()
-        data = response.json()
-        st.session_state.risk_score = float(data["risk_score"])
-        st.session_state.risk_category = str(data["risk_category"])
-    except requests.exceptions.RequestException as exc:
-        st.session_state.predict_error = str(exc)
-    except (KeyError, TypeError, ValueError) as exc:
-        st.session_state.predict_error = f"Invalid response: {exc}"
+    # 4 & 5. Map Marker logic (Strict string passing for JSON serialization)
+    if st.session_state.prediction:
+        risk_cat = st.session_state.prediction.get("risk_category", "Low")
+        color_mapping = {"Low": "green", "Medium": "orange", "High": "red"}
+        marker_color = color_mapping.get(risk_cat, "gray")
 
-st.markdown(
-    '<h1 class="dashboard-header">Wildfire Risk Prediction Dashboard</h1>',
-    unsafe_allow_html=True,
-)
-st.markdown(
-    '<p class="dashboard-subtitle">ML-powered early warning system</p>',
-    unsafe_allow_html=True,
-)
-
-col_map, col_analytics = st.columns([1.65, 1.0], gap="large")
-
-with col_map:
-    st.markdown('<p class="panel-title">Map</p>', unsafe_allow_html=True)
-    with st.container(border=True):
-        m = folium.Map(
-            location=DEFAULT_MAP_CENTER,
-            zoom_start=DEFAULT_ZOOM,
-            tiles="CartoDB dark_matter",
-        )
-        # Plain strings only — no callables, lambdas, or HTML callbacks (st_folium serialization)
-        popup_label = "Study region"
-        tooltip_label = "Study region"
         folium.Marker(
-            location=DEFAULT_MAP_CENTER,
-            popup=popup_label,
-            tooltip=tooltip_label,
+            location=[current_lat, current_lon],
+            popup=str(f"Risk Category: {risk_cat}"),
+            tooltip=str("Selected Location"),
+            icon=folium.Icon(color=marker_color, icon="fire")
         ).add_to(m)
-        st_folium(m, height=420, use_container_width=True)
 
-with col_analytics:
-    st.markdown('<p class="panel-title">Analytics</p>', unsafe_allow_html=True)
+    st_folium(m, use_container_width=True, height=600, returned_objects=[])
 
-    with st.container(border=True):
-        st.caption("Risk summary")
-        c1, c2 = st.columns(2)
-        rs = st.session_state.risk_score
-        rc = st.session_state.risk_category
-        with c1:
-            st.metric(
-                "Risk score",
-                f"{rs:.4f}" if rs is not None else "—",
-                help="From FastAPI /predict",
-            )
-        with c2:
-            st.metric("Category", rc if rc is not None else "—")
+# 6. Right Panel: Risk Analytics & Features
+with col_panel:
+    st.subheader("Risk Analytics")
 
-    st.markdown("<br/>", unsafe_allow_html=True)
+    if st.session_state.prediction:
+        pred = st.session_state.prediction
+        score = pred.get("risk_score", 0.0)
+        cat = pred.get("risk_category", "Unknown")
 
-    with st.container(border=True):
-        st.caption("Feature snapshot")
-        st.json(
-            {
-                "temperature": temperature,
-                "NDVI": ndvi,
-                "humidity": humidity,
-                "wind_speed": wind_speed,
-                "slope": slope,
-            }
-        )
+        # Color hex codes for dark theme modern UI
+        color_hex = {"Low": "#00C851", "Medium": "#FFBB33", "High": "#ff4444"}.get(cat, "#ffffff")
 
-    if st.session_state.predict_error:
-        st.error(st.session_state.predict_error)
+        # Risk Card
+        st.markdown(f"""
+            <div style="background-color: #262730; padding: 25px; border-radius: 12px; text-align: center; border: 1px solid #444; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
+                <p style="margin: 0; font-size: 1.1rem; color: #cccccc; text-transform: uppercase; letter-spacing: 1px;">Calculated Risk Score</p>
+                <h1 style="margin: 15px 0; font-size: 4rem; color: {color_hex}; line-height: 1;">{score:.2f}</h1>
+                <h3 style="margin: 0; color: {color_hex}; font-weight: 600; letter-spacing: 2px;">{cat.upper()} RISK</h3>
+            </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("#### Environmental Features")
+        
+        # Displaying the default/simulated features gracefully
+        fc1, fc2 = st.columns(2)
+        fc1.metric("Temperature", f"{default_features['temperature']} °C")
+        fc2.metric("Humidity", f"{default_features['humidity']} %")
+        fc1.metric("Wind Speed", f"{default_features['wind_speed']} km/h")
+        fc2.metric("NDVI", f"{default_features['NDVI']}")
+        st.metric("Terrain Slope", f"{default_features['slope']} °")
+
+    else:
+        st.info("Awaiting execution. Configure your location parameters in the sidebar and click 'Generate Risk Map' to view analytics.")
