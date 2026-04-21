@@ -118,7 +118,7 @@ if generate_btn:
         # Send dynamic features to your FastAPI backend
         try:
             response = requests.post(
-                "http://127.0.0.1:8000/predict", 
+                "https://wildfire-protection.onrender.com/predict", 
                 json=st.session_state.current_features, 
                 timeout=10
             )
